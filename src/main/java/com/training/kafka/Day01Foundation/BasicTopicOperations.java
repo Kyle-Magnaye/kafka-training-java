@@ -1,12 +1,13 @@
 package com.training.kafka.Day01Foundation;
 
-import org.apache.kafka.clients.admin.*;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.*;
 import java.util.concurrent.ExecutionException;
-
+import java.util.stream.Collectors;
+import org.apache.kafka.clients.admin.*;
+import org.apache.kafka.common.TopicPartitionInfo;
+import org.apache.kafka.common.config.ConfigResource;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 /**
  * Day 1: Basic Topic Operations
  *
@@ -26,35 +27,36 @@ public class BasicTopicOperations {
         this.adminClient = AdminClient.create(props);
     }
 
-    /**
-     * Create a new topic with specified configuration
-     */
-    public void createTopic(String topicName, int numPartitions, short replicationFactor) {
+    private void createTopic(String topicName, int numPartitions, short replicationFactor, Map<String, String> configs) {
         try {
             NewTopic newTopic = new NewTopic(topicName, numPartitions, replicationFactor);
 
-            // Optional: Set topic-specific configurations
-            Map<String, String> configs = new HashMap<>();
-            configs.put("retention.ms", "86400000"); // 24 hours
-            configs.put("compression.type", "snappy");
-            newTopic.configs(configs);
+            if (configs != null && !configs.isEmpty()) {
+                newTopic.configs(configs);
+            }
 
             CreateTopicsResult result = adminClient.createTopics(Collections.singletonList(newTopic));
 
-            // Wait for creation to complete
             result.all().get();
-            logger.info("Topic '{}' created successfully with {} partitions", topicName, numPartitions);
+            logger.info("Topic '{}' created successfully.", topicName);
 
         } catch (ExecutionException e) {
             if (e.getCause() instanceof org.apache.kafka.common.errors.TopicExistsException) {
-                logger.warn("Topic '{}' already exists", topicName);
+                logger.warn("Topic '{}' already exists.", topicName);
             } else {
-                logger.error("Failed to create topic '{}': {}", topicName, e.getMessage());
+                logger.error("Failed to create topic '{}'", topicName, e);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            logger.error("Operation interrupted while creating topic '{}'", topicName);
+            logger.error("Operation interrupted while creating topic '{}'", topicName, e);
         }
+    }
+
+    public void createTopic(String topicName, int numPartitions, short replicationFactor) {
+        Map<String, String> defaultConfigs = new HashMap<>();
+        defaultConfigs.put("retention.ms", "86400000"); 
+        defaultConfigs.put("compression.type", "snappy");
+        createTopic(topicName, numPartitions, replicationFactor, defaultConfigs);
     }
 
     /**
@@ -110,6 +112,128 @@ public class BasicTopicOperations {
         logger.info("AdminClient closed");
     }
 
+    public void analyzePartitionDistribution(String topicName) {
+        try {
+            DescribeTopicsResult result = adminClient.describeTopics(Collections.singletonList(topicName));
+            TopicDescription description = result.topicNameValues().get(topicName).get();
+            
+            logger.info("=== Partition Analysis for '{}' ===", topicName);
+            logger.info("Total partitions: {}", description.partitions().size());
+            
+            Map<Integer, Integer> brokerPartitionCount = new HashMap<>();
+            
+            for (TopicPartitionInfo partition : description.partitions()) {
+                int leaderId = partition.leader().id();
+                brokerPartitionCount.merge(leaderId, 1, Integer::sum);
+                
+                logger.info("Partition {}: Leader=Broker-{}, Replicas={}", 
+                    partition.partition(), 
+                    leaderId,
+                    partition.replicas().stream()
+                        .map(node -> "Broker-" + node.id())
+                        .collect(Collectors.joining(", ")));
+            }
+            
+            logger.info("Partition distribution across brokers:");
+            brokerPartitionCount.forEach((brokerId, count) -> 
+                logger.info("  Broker-{}: {} partitions", brokerId, count));
+                
+        } catch (Exception e) {
+            logger.error("Error analyzing partition distribution", e);
+        }
+    }
+
+    public void updateTopicConfigs(String topicName, Map<String, String> newConfigs) {
+        logger.info("\n--- Attempting to update configuration for topic: '{}' ---", topicName);
+
+        ConfigResource topicResource = new ConfigResource(ConfigResource.Type.TOPIC, topicName);
+
+        List<AlterConfigOp> ops = new ArrayList<>();
+        for (Map.Entry<String, String> configEntry : newConfigs.entrySet()) {
+            ops.add(
+                new AlterConfigOp(
+                    new ConfigEntry(configEntry.getKey(), configEntry.getValue()),
+                    AlterConfigOp.OpType.SET
+                )
+            );
+        }
+
+        try {
+            AlterConfigsResult alterResult = adminClient.incrementalAlterConfigs(Collections.singletonMap(topicResource, ops));
+            alterResult.all().get(); // Wait for the update to complete.
+            logger.info("Successfully updated configuration for '{}'.", topicName);
+
+        } catch (ExecutionException | InterruptedException e) {
+            logger.error("Failed to update configuration for topic '{}'", topicName, e);
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    public void exercise1() {
+        logger.info("==============================================");
+        logger.info("======== Running Exercise 1 Solution =========");
+        logger.info("==============================================");
+        
+        createTopic("exercise-1-topic", 4, (short) 1);
+        createTopic("exercise-1-compare", 2, (short) 1);
+        
+        Set<String> topics = listTopics();
+        logger.info("Found {} topics in total after creation.", topics.size());
+        
+        describeTopic("exercise-1-topic");
+        describeTopic("exercise-1-compare");
+        
+        logger.info("Exercise completed successfully.");
+    }
+
+    public void exercise2() {
+        logger.info("==============================================");
+        logger.info("======== Running Exercise 2 Solution =========");
+        logger.info("==============================================");
+        
+        createTopic("partition-demo", 6, (short) 1);
+        
+        describeTopic("partition-demo");
+        analyzePartitionDistribution("partition-demo");
+        
+        logger.info("Exercise completed successfully.");
+    }
+
+    public void exercise3() {
+        logger.info("==============================================");
+        logger.info("======== Running Exercise 3 Solution =========");
+        logger.info("==============================================");
+
+        String topicToUpdate = "high-retention-topic";
+        
+        Map<String, String> highRetentionConfigs = new HashMap<>();
+        highRetentionConfigs.put("retention.ms", "604800000"); 
+        highRetentionConfigs.put("segment.ms", "3600000");  
+        createTopic(topicToUpdate, 3, (short) 1, highRetentionConfigs);
+
+        Map<String, String> compactedConfigs = new HashMap<>();
+        compactedConfigs.put("cleanup.policy", "compact");
+        compactedConfigs.put("min.cleanable.dirty.ratio", "0.1");
+        createTopic("compacted-topic", 3, (short) 1, compactedConfigs);
+
+        logger.info("\n--- Describing topics after initial creation (BEFORE update) ---");
+        describeTopic(topicToUpdate);
+        describeTopic("compacted-topic");
+
+        logger.info("\n--- Now updating configuration for '{}' ---", topicToUpdate);
+        Map<String, String> updates = new HashMap<>();
+        updates.put("retention.ms", "86400000"); 
+
+        updateTopicConfigs(topicToUpdate, updates);
+
+        logger.info("\n--- Describing '{}' after configuration update (AFTER update) ---");
+        describeTopic(topicToUpdate);
+        
+        logger.info("\nExercise completed successfully.");
+    }
+
     /**
      * Main method for demonstration
      */
@@ -119,16 +243,9 @@ public class BasicTopicOperations {
         BasicTopicOperations topicOps = new BasicTopicOperations(bootstrapServers);
 
         try {
-            // Create demonstration topics
-            topicOps.createTopic("demo-topic-1", 3, (short) 1);
-            topicOps.createTopic("demo-topic-2", 6, (short) 1);
-
-            // List all topics
-            topicOps.listTopics();
-
-            // Describe a topic
-            topicOps.describeTopic("demo-topic-1");
-
+            topicOps.exercise1();
+            topicOps.exercise2();
+            topicOps.exercise3();
         } finally {
             topicOps.close();
         }

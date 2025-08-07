@@ -18,7 +18,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
         <!-- Kafka and Confluent -->
-        <kafka.version>3.8.0</kafka.version>
+        <kafka.version>3.7.0</kafka.version>
         <confluent.version>7.7.0</confluent.version>
         <avro.version>1.12.0</avro.version>
 
